@@ -4,10 +4,10 @@ from glob import glob
 import numpy as np 
 import h5py
 
-
+import imageio
 #prefix = 'C:\\Users\\yuan\\Downloads'
 # prefix = '/Users/yuan/Downloads/'
-prefix = './datasets/'
+prefix = './'
 
 def get_img(img_path, is_crop=True, crop_h=256, resize_h=64, normalize=False):
     img = scipy.misc.imread(img_path, mode='RGB').astype(np.float)
@@ -53,9 +53,9 @@ def get_img(img_path, is_crop=True, crop_h=256, resize_h=64, normalize=False):
 
 class CelebA():
     def __init__(self):
-        datapath = 'celeba-hq-1024x1024.h5'
-        resolution = ['data2x2', 'data4x4', 'data8x8', 'data16x16', 'data32x32', 'data64x64', \
-                        'data128x128', 'data256x256', 'data512x512', 'data1024x1024']
+        datapath = 'celebah5'
+        resolution = ['data4x4', 'data8x8', 'data16x16', 'data32x32', 'data64x64', \
+                        'data128x128']
         self._base_key = 'data'
         self.dataset = h5py.File(os.path.join(prefix, datapath), 'r')
         self._len = {k:len(self.dataset[k]) for k in resolution}
@@ -63,8 +63,11 @@ class CelebA():
 
     def __call__(self, batch_size, size, level=None):
         key = self._base_key + '{}x{}'.format(size, size)
+        key_gt = self._base_key + '{}x{}'.format(128, 128)
         idx = np.random.randint(self._len[key], size=batch_size)
         batch_x = np.array([self.dataset[key][i]/127.5-1.0 for i in idx], dtype=np.float32)
+        # batch_gt = np.array([self.dataset[key_gt][i]/127.5-1.0 for i in idx], dtype=np.float32)
+        # print('batch_x shape {}'.format(batch_x.shape))
         if level is not None:
             if level != int(level):
                 min_lw, max_lw = int(level+1)-level, level-int(level)
@@ -82,7 +85,7 @@ class CelebA():
                 if i*N_col+j < samples.shape[0]:
                     combined_imgs[:,i*height:(i+1)*height, j*width:(j+1)*width] = samples[i*N_col+j]
         combined_imgs = np.transpose(combined_imgs, [1, 2, 0])
-        scipy.misc.imsave(file_name+'.png', combined_imgs)
+        imageio.imsave(file_name+'.png', combined_imgs)
 
 
 class RandomNoiseGenerator():

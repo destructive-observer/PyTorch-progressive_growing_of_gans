@@ -12,7 +12,7 @@ import glob
 import pickle
 import argparse
 import threading
-import Queue
+import queue
 import traceback
 import numpy as np
 import scipy.ndimage
@@ -31,7 +31,7 @@ class HDF5Exporter:
         self.h5_lods = []
         self.buffers = []
         self.buffer_sizes = []
-        for lod in xrange(rlog2, -1, -1):
+        for lod in range(rlog2, -1, -1):
             r = 2 ** lod; c = channels
             bytes_per_item = c * (r ** 2)
             chunk_size = int(np.ceil(128.0 / bytes_per_item))
@@ -43,14 +43,14 @@ class HDF5Exporter:
             self.buffer_sizes.append(0)
 
     def close(self):
-        for lod in xrange(len(self.h5_lods)):
+        for lod in range(len(self.h5_lods)):
             self.flush_lod(lod)
         self.h5_file.close()
 
     def add_images(self, img):
         assert img.ndim == 4 and img.shape[1] == self.channels and img.shape[2] == img.shape[3]
         assert img.shape[2] >= self.resolution and img.shape[2] == 2 ** int(np.floor(np.log2(img.shape[2])))
-        for lod in xrange(len(self.h5_lods)):
+        for lod in range(len(self.h5_lods)):
             while img.shape[2] > self.resolution / (2 ** lod):
                 img = img.astype(np.float32)
                 img = (img[:, :, 0::2, 0::2] + img[:, :, 0::2, 1::2] + img[:, :, 1::2, 0::2] + img[:, :, 1::2, 1::2]) * 0.25
@@ -104,10 +104,10 @@ class WorkerThread(threading.Thread):
 class ThreadPool(object):
     def __init__(self, num_threads):
         assert num_threads >= 1
-        self.task_queue = Queue.Queue()
+        self.task_queue = queue.Queue()
         self.result_queues = dict()
         self.num_threads = num_threads
-        for idx in xrange(self.num_threads):
+        for idx in range(self.num_threads):
             thread = WorkerThread(self.task_queue)
             thread.daemon = True
             thread.start()
@@ -115,7 +115,7 @@ class ThreadPool(object):
     def add_task(self, func, args=()):
         assert hasattr(func, '__call__') # must be a function
         if func not in self.result_queues:
-            self.result_queues[func] = Queue.Queue()
+            self.result_queues[func] = queue.Queue()
         self.task_queue.put((func, args, self.result_queues[func]))
 
     def get_result(self, func, verbose_exceptions=True): # returns (result, args)
@@ -127,7 +127,7 @@ class ThreadPool(object):
         return result, args
 
     def finish(self):
-        for idx in xrange(self.num_threads):
+        for idx in range(self.num_threads):
             self.task_queue.put((None, (), None))
 
     def __enter__(self): # for 'with' statement
@@ -294,7 +294,7 @@ def create_custom(h5_filename, image_dir):
         print('Error: Input images must be stored as RGB or grayscale')
     
     h5 = HDF5Exporter(h5_filename, resolution, channels)
-    for idx in xrange(len(image_filenames)):
+    for idx in range(len(image_filenames)):
         print('%d / %d\r' % (idx, len(image_filenames)))
         img = np.asarray(PIL.Image.open(image_filenames[idx]))
         if channels == 1:
@@ -352,7 +352,7 @@ def create_mnist_rgb(h5_filename, mnist_dir, num_images=1000000, random_seed=123
     print('Creating %s' % h5_filename)
     h5 = HDF5Exporter(h5_filename, 32, 3)
     np.random.seed(random_seed)
-    for idx in xrange(num_images):
+    for idx in range(num_images):
         if idx % 100 == 0:
             print('%d / %d\r' % (idx, num_images))
         h5.add_images(images[np.newaxis, np.random.randint(images.shape[0], size=3)])
@@ -368,7 +368,7 @@ def create_cifar10(h5_filename, cifar10_dir, export_labels=False):
     print('Loading CIFAR-10 data from %s' % cifar10_dir)
     images = []
     labels = []
-    for batch in xrange(1, 6):
+    for batch in range(1, 6):
         with open(os.path.join(cifar10_dir, 'data_batch_%d' % batch), 'rb') as file:
             data = pickle.load(file)
         images.append(data['data'].reshape(-1, 3, 32, 32))
@@ -448,7 +448,7 @@ def create_celeba(h5_filename, celeba_dir, cx=89, cy=121):
         return
     
     h5 = HDF5Exporter(h5_filename, 128, 3)
-    for idx in xrange(num_images):
+    for idx in range(num_images):
         print('%d / %d\r' % (idx, num_images))
         img = np.asarray(PIL.Image.open(image_filenames[idx]))
         assert img.shape == (218, 178, 3)
@@ -465,12 +465,12 @@ def create_celeba(h5_filename, celeba_dir, cx=89, cy=121):
 
 def create_celeba_hq(h5_filename, celeba_dir, delta_dir, num_threads=4, num_tasks=100):
     print('Loading CelebA data from %s' % celeba_dir)
-    glob_pattern = os.path.join(celeba_dir, 'img_celeba', '*.jpg')
+    glob_pattern = os.path.join(celeba_dir, 'img_align_celeba_png', '*.png')
     glob_expected = 202599
     if len(glob.glob(glob_pattern)) != glob_expected:
         print('Error: Expected to find %d images in %s' % (glob_expected, glob_pattern))
         return
-    with open(os.path.join(celeba_dir, 'Anno', 'list_landmarks_celeba.txt'), 'rt') as file:
+    with open(os.path.join(celeba_dir, 'Anno', 'list_landmarks_align_celeba.txt'), 'rt') as file:
         landmarks = [[float(value) for value in line.split()[1:]] for line in file.readlines()[2:]]
         landmarks = np.float32(landmarks).reshape(-1, 5, 2)
         
@@ -491,6 +491,7 @@ def create_celeba_hq(h5_filename, celeba_dir, delta_dir, num_threads=4, num_task
     with open(os.path.join(delta_dir, 'image_list.txt'), 'rt') as file:
         lines = [line.split() for line in file]
         fields = dict()
+        # print(lines)
         for idx, field in enumerate(lines[0]):
             type = int if field.endswith('idx') else str
             fields[field] = [type(line[idx]) for line in lines[1:]]

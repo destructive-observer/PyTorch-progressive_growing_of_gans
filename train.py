@@ -10,7 +10,8 @@ from utils.data import CelebA, RandomNoiseGenerator
 from models.model import Generator, Discriminator
 import argparse
 import numpy as np
-from scipy.misc import imsave
+# from scipy.misc import imsave
+import imageio
 from utils.logger import Logger
 
 class PGGAN():
@@ -26,7 +27,7 @@ class PGGAN():
         self.use_cuda = len(gpu) > 0
         os.environ['CUDA_VISIBLE_DEVICES'] = gpu
 
-        self.bs_map = {2**R: self.get_bs(2**R) for R in range(2, 11)} # batch size map keyed by resolution_level
+        self.bs_map = {2**R: self.get_bs(2**R) for R in range(2, 7)} # batch size map keyed by resolution_level
         self.rows_map = {32: 8, 16: 4, 8: 4, 4: 2, 2: 2}
 
         self.restore_model()
@@ -110,7 +111,7 @@ class PGGAN():
         return 0.0
 
     def _get_data(self, d):
-        return d.data[0] if isinstance(d, Variable) else d
+        return d.data.item() if isinstance(d, Variable) else d
 
     def compute_G_loss(self):
         g_adv_loss = self.compute_adv_loss(self.d_fake, True, 1)
@@ -188,7 +189,7 @@ class PGGAN():
             return 0
 
         if hasattr(self, '_d_'):
-            self._d_ = self._d_ * 0.9 + np.clip(torch.mean(self.d_real).data[0], 0.0, 1.0) * 0.1
+            self._d_ = self._d_ * 0.9 + np.clip(torch.mean(self.d_real).data.item(), 0.0, 1.0) * 0.1
         else:
             self._d_ = 0.0
         strength = 0.2 * max(0, self._d_ - 0.5)**2
@@ -264,12 +265,13 @@ class PGGAN():
     def train_phase(self, R, phase, batch_size, cur_nimg, from_it, total_it):
         assert total_it >= from_it
         resol = 2 ** (R+1)
- 
+        print('train_phase from_lt{} total_lt{}'.format(from_it,total_it))
         for it in range(from_it, total_it):
             if phase == 'stabilize':
                 cur_level = R
             else:
-                cur_level = R + total_it/float(from_it)
+                cur_level = R + (it - from_it) / float(total_it - from_it)
+                # cur_level = R + total_it/float(from_it)
             cur_resol = 2 ** int(np.ceil(cur_level+1))
 
             # get a batch noise and real images
@@ -278,7 +280,7 @@ class PGGAN():
 
             # ===preprocess===
             self.preprocess(z, x)
-            self.update_lr(cur_nimg)
+            # self.update_lr(cur_nimg)
 
             # ===update D===
             self.optim_D.zero_grad()
@@ -299,7 +301,7 @@ class PGGAN():
             samples = []
             if (it % self.opts['sample_freq'] == 0) or it == total_it-1:
                 samples = self.sample()
-                imsave(os.path.join(self.opts['sample_dir'],
+                imageio.imsave(os.path.join(self.opts['sample_dir'],
                                     '%dx%d-%s-%s.png' % (cur_resol, cur_resol, phase, str(it).zfill(6))), samples)
 
             # ===tensorboard visualization===
@@ -325,16 +327,17 @@ class PGGAN():
 
         for R in range(from_level-1, to_level):
             batch_size = self.bs_map[2 ** (R+1)]
-
+            print('train stage batchsize:{}, R:{} '.format(batch_size,R))
             phases = {'stabilize':[0, train_kimg//batch_size], 'fade_in':[train_kimg//batch_size+1, (transition_kimg+train_kimg)//batch_size]}
             if self.is_restored and R == from_level-1:
                 phases[self._phase][0] = self._epoch + 1
                 if self._phase == 'fade_in':
                     del phases['stabilize']
-
+            print('train phase stage {}'.format(phases))
             for phase in ['stabilize', 'fade_in']:
                 if phase in phases:
                     _range = phases[phase]
+                    print('train phase stage range_{},{}'.format(_range[0],_range[1]))
                     self.train_phase(R, phase, batch_size, _range[0]*batch_size, _range[0], _range[1])
 
     def sample(self):

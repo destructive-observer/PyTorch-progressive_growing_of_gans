@@ -27,6 +27,60 @@ class PixelNormLayer(nn.Module):
     def __repr__(self):
         return self.__class__.__name__ + '(eps = %s)' % (self.eps)
 
+class PixelNormLayer1(nn.Module):
+    """
+    Pixelwise feature vector normalization.
+    """
+    def __init__(self, eps=1e-8):
+        super(PixelNormLayer1, self).__init__()
+        self.eps = eps
+    
+    def forward(self, x):
+        return x * torch.rsqrt(torch.mean(x ** 2, dim=1, keepdim=True) + 1e-8)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(eps = %s)' % (self.eps)
+
+class Trans_WScaleLayer(nn.Module):
+    """
+    Applies equalized learning rate to the preceding layer.
+    """
+    def __init__(self, incoming):
+        super(Trans_WScaleLayer, self).__init__()
+        self.incoming = incoming
+        # print('incoming {}'.format(incoming))
+        self.bias = None
+        if(hasattr(self.incoming,'weight')):
+            self.scale = (torch.mean(self.incoming.weight.data ** 2)) ** 0.5
+            self.incoming.weight.data.copy_(self.incoming.weight.data / self.scale)
+            # self.bias = None
+            # print(self.scale)
+        else:
+            self.scale = 0
+        if(hasattr(self.incoming,'bias')):
+            if self.incoming.bias is not None:
+                self.bias = self.incoming.bias
+                # self.incoming.bias = None
+
+    def forward(self, x):
+        if(self.scale !=0):
+            x = self.scale * x
+            # print(self.scale.size())
+        if self.bias is not None:
+            # print(self.bias.size())
+            # print(x.size())
+            if(self.bias.size()[0]>=x.size()[1]):
+                x += self.bias.expand_as(x)
+            # else:
+            #     m=x.size()[1]//self.bias.size()[0]
+            #     a=x.size()[1]%self.bias.size()[0]
+            #     # size = self.bias.size()[0]*m
+            #     x += torch.cat((self.bias.view(1, self.bias.size()[0], 1).repeat(1,m,1),self.bias.view(1, self.bias.size()[0], 1)[:,:a,:]),dim=1)
+        return x
+
+    def __repr__(self):
+        param_str = '(incoming = %s)' % (self.incoming.__class__.__name__)
+        return self.__class__.__name__ + param_str
 
 class WScaleLayer(nn.Module):
     """
@@ -35,9 +89,11 @@ class WScaleLayer(nn.Module):
     def __init__(self, incoming):
         super(WScaleLayer, self).__init__()
         self.incoming = incoming
-        self.scale = (torch.mean(self.incoming.weight.data ** 2)) ** 0.5
-        self.incoming.weight.data.copy_(self.incoming.weight.data / self.scale)
-        self.bias = None
+        # print(incoming)
+        if(hasattr(self.incoming,'weight')):
+            self.scale = (torch.mean(self.incoming.weight.data ** 2)) ** 0.5
+            self.incoming.weight.data.copy_(self.incoming.weight.data / self.scale)
+            self.bias = None
         if self.incoming.bias is not None:
             self.bias = self.incoming.bias
             self.incoming.bias = None
@@ -56,8 +112,11 @@ class WScaleLayer(nn.Module):
 def mean(tensor, axis, **kwargs):
     if isinstance(axis, int):
         axis = [axis]
+    # print(axis)
+    # print(tensor.shape)
     for ax in axis:
-        tensor = torch.mean(tensor, axis=ax, **kwargs)
+        # print(ax)
+        tensor = torch.mean(tensor, ax, **kwargs)
     return tensor
 
 
@@ -157,19 +216,28 @@ class LayerNormLayer(nn.Module):
     """
     Layer normalization. Custom reimplementation based on the paper: https://arxiv.org/abs/1607.06450
     """
-    def __init__(self, incoming, eps=1e-4):
+    def __init__(self, incoming, param,eps=1e-4):
         super(LayerNormLayer, self).__init__()
         self.incoming = incoming
         self.eps = eps
         self.gain = Parameter(torch.FloatTensor([1.0]), requires_grad=True)
         self.bias = None
-
-        if self.incoming.bias is not None:
-            self.bias = self.incoming.bias
-            self.incoming.bias = None
+        # print(dir(self.incoming)) 
+        if param !='leaky_relu':
+            if self.incoming.bias is not None:
+                self.bias = self.incoming.bias
+                self.incoming.bias = None
 
     def forward(self, x):
-        x = x - mean(x, axis=range(1, len(x.size())))
+        # print(x.shape)
+        # x1= mean(x, axis=range(len(x.size())-1,0,-1))
+        x1= mean(x, axis=range(1, len(x.size())),keepdim=True)
+        # print(x1.shape)
+        # x1=x1.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+        # print(x1.shape)
+        # x1 = x1.repeat(1,x.size(1),x.size(2),x.size(3))
+        # print(x1.shape)
+        x = x - x1
         x = x * 1.0/(torch.sqrt(mean(x**2, axis=range(1, len(x.size())), keepdim=True) + self.eps))
         x = x * self.gain
         if self.bias is not None:
@@ -213,7 +281,7 @@ def resize_activations(v, so):
     # v = v.repeat(*shape)
     if si[2] < so[2]: 
         assert so[2] % si[2] == 0 and so[2] / si[2] == so[3] / si[3]  # currently only support this case
-        v = F.upsample(v, scale_factor=so[2]//si[2], mode='nearest')
+        v = F.upsample(v, scale_factor=so[2]//si[2], mode='bicubic')
 
     # Increase feature maps.
     if si[1] < so[1]:
@@ -223,12 +291,13 @@ def resize_activations(v, so):
 
 
 class GSelectLayer(nn.Module):
+    #chain:lod  post:nin
     def __init__(self, pre, chain, post):
         super(GSelectLayer, self).__init__()
         assert len(chain) == len(post)
-        self.pre = pre
-        self.chain = chain
-        self.post = post
+        self.pre = pre#pixnormalize  or none
+        self.chain = chain#pggan G main layer
+        self.post = post#to_rgb layer
         self.N = len(self.chain)
 
     def forward(self, x, y=None, cur_level=None, insert_y_at=None):
@@ -295,13 +364,18 @@ class DSelectLayer(nn.Module):
             print('D: level=%s, size=%s, max_level=%s, min_level=%s' % ('in', x.size(), max_level, min_level))
 
         if max_level == min_level:
+            # print('i equal')
+            # print('before {}'.format(x.shape))
             x = self.inputs[max_level](x)
+            # print(self.inputs[max_level])
+            # print('after {}'.format(x.shape))
             if max_level == insert_y_at:
                 x = self.chain[max_level](x, y)
             else:
                 x = self.chain[max_level](x)
         else:
             out = {}
+            # print('i not equal')
             tmp = self.inputs[max_level](x)
             if max_level == insert_y_at:
                 tmp = self.chain[max_level](tmp, y)
@@ -317,6 +391,7 @@ class DSelectLayer(nn.Module):
                 x = self.chain[min_level](x)
 
         for level in range(_from, _to, _step):
+            # print('i am level')
             if level == insert_y_at:
                 x = self.chain[level](x, y)
             else:
